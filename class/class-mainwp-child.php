@@ -423,10 +423,9 @@ class MainWP_Child {
     public function init_custom_updater() {
         if ( file_exists( MAINWP_CHILD_PLUGIN_DIR . 'includes/updater.php' ) ) {
             require_once MAINWP_CHILD_PLUGIN_DIR . 'includes/updater.php'; //phpcs:ignore -- NOSONAR - compatible.
-        } else {
-            return;
         }
-        if ( function_exists( '\MainWP\Child\UUPD\V1\UUPD_Updater_V1::register' ) ) {
+
+        if ( class_exists( '\MainWP\Child\UUPD\V1\UUPD_Updater_V1' ) ) {
             $updater_config = array(
                 'plugin_file'      => plugin_basename( MAINWP_CHILD_FILE ),
                 'slug'             => 'mainwp-child',
