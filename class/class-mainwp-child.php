@@ -429,12 +429,12 @@ class MainWP_Child {
         if ( function_exists( '\MainWP\Child\UUPD\V1\UUPD_Updater_V1::register' ) ) {
             $updater_config = array(
                 'plugin_file'      => plugin_basename( MAINWP_CHILD_FILE ),
-                'slug'             => 'mainwp',
-                'name'             => 'MainWP',
+                'slug'             => 'mainwp-child',
+                'name'             => 'MainWP Child',
                 'version'          => static::$version,
                 // 'key'              => 'YourSecretKeyHere',             // optional if using GitHub
                 'server'           => 'https://github.com/github-username/mainwp-child',  // GitHub or private server.
-                'github_token'     => 'github_pat_xxxxxx', // optional.
+                'github_token'     => 'github_pat_xxxxx', // optional.
                 'allow_prerelease' => true, // Optional � default is false. Set to true to allow beta/RC updates.
             );
             \MainWP\Child\UUPD\V1\UUPD_Updater_V1::register( $updater_config );
