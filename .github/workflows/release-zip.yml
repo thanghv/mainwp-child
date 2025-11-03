@@ -1,0 +1,168 @@
+name: Build WP release ZIP
+
+# ensure GITHUB_TOKEN has write access to repo contents and packages
+permissions:
+  contents: write
+  packages: write
+  # optionally: checks: write, issues: write if you need those
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name (e.g. v1.2.3). Required when using workflow_dispatch'
+        required: false
+      create_release:
+        description: 'If true, create the release for the given tag (default: true)'
+        required: false
+        default: 'true'
+
+env:
+  PLUGIN_SLUG: mainwp-child
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.get_release_id.outputs.release_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set variables
+        id: vars
+        run: |
+          REPO_NAME=$(basename "${GITHUB_REPOSITORY}")
+          PLUGIN_DIR="${PLUGIN_SLUG:-$REPO_NAME}"
+          # If triggered by release event, set TAG from release; otherwise use input
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${GITHUB_REF##*/}"
+          else
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          DIST_DIR="dist"
+          # ZIP name includes tag for clarity
+          ZIP_NAME="${PLUGIN_DIR}-${TAG}.zip"
+          echo "REPO_NAME=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "PLUGIN_DIR=${PLUGIN_DIR}" >> $GITHUB_OUTPUT
+          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+          echo "DIST_DIR=${DIST_DIR}" >> $GITHUB_OUTPUT
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Optional build (composer / npm)
+        run: |
+          set -euo pipefail
+          if [ -f composer.json ]; then
+            echo "Installing Composer dependencies..."
+            php -r "copy('https://getcomposer.org/installer','composer-setup.php');"
+            php composer-setup.php --install-dir=/tmp --filename=composer
+            /tmp/composer install --no-dev --optimize-autoloader
+            rm -f composer-setup.php
+          fi
+          if [ -f package.json ]; then
+            echo "Running npm ci..."
+            # If node is not available in the runner by default, setup-node step can be added.
+            npm ci
+            if npm run | grep -q ' build'; then
+              npm run build || true
+            fi
+          fi
+
+      - name: Prepare dist folder
+        run: |
+          set -euo pipefail
+          PLUGIN_DIR="${{ steps.vars.outputs.PLUGIN_DIR }}"
+          rm -rf dist
+          mkdir -p dist
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='dist' \
+            --exclude='node_modules' \
+            --exclude='*.zip' \
+            --exclude='.gitattributes' \
+            --exclude='.gitignore' \
+            --exclude='LICENSE.md' \
+            --exclude='LICENSE.txt' \
+            --exclude='phpcs.xml' \
+            --exclude='README.md' \
+            ./ "dist/${PLUGIN_DIR}/"
+
+      - name: Create ZIP file
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ZIP_NAME="${{ steps.vars.outputs.ZIP_NAME }}"
+          PLUGIN_DIR="${{ steps.vars.outputs.PLUGIN_DIR }}"
+          zip -r "$ZIP_NAME" "$PLUGIN_DIR"
+          echo "Created ZIP: $ZIP_NAME"
+          unzip -l "$ZIP_NAME" | head -n 20
+
+      # Get or create release ID
+      - name: Get or create release (workflow_dispatch)
+        id: get_release_id
+        run: |
+          set -euo pipefail
+          # If triggered by release event, grab the release id from event payload
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # release id available in github.event.release.id
+            echo "release_id=${{ github.event.release.id }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # For workflow_dispatch: tag input is required
+          TAG="${{ steps.vars.outputs.TAG }}"
+          if [ -z "$TAG" ]; then
+            echo "Error: no tag provided. When running workflow_dispatch you must provide 'tag' input." >&2
+            exit 1
+          fi
+
+          CREATE_RELEASE="${{ github.event.inputs.create_release }}"
+          if [ "$CREATE_RELEASE" = "true" ] || [ -z "$CREATE_RELEASE" ]; then
+            echo "Creating release for tag $TAG"
+            # Create release (draft=false, prerelease=true if tag contains beta/rc)
+            PRERELEASE=false
+            if echo "$TAG" | grep -qiE 'beta|rc|alpha'; then
+              PRERELEASE=true
+            fi
+            # Use GitHub CLI via curl API to create release and return id
+            API_RESPONSE=$(curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"prerelease\":$PRERELEASE}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases")
+            RELEASE_ID=$(echo "$API_RESPONSE" | jq -r .id)
+            if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+              echo "Failed to create release. API response: $API_RESPONSE" >&2
+              exit 1
+            fi
+            echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            # Find existing release by tag
+            API_RESPONSE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")
+            RELEASE_ID=$(echo "$API_RESPONSE" | jq -r .id)
+            if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+              echo "Release with tag $TAG not found." >&2
+              exit 1
+            fi
+            echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload ZIP as release asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ steps.get_release_id.outputs.release_id }}/assets{?name,label}
+          asset_path: dist/${{ steps.vars.outputs.ZIP_NAME }}
+          asset_name: ${{ steps.vars.outputs.ZIP_NAME }}
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
