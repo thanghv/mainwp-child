@@ -8,11 +8,11 @@
 namespace MainWP\Child;
 
 /**
- * Class MainWP_Child_Custom_Reinstaller
+ * Class MainWP_Child_Custom_Updater
  *
  * @package MainWP\Child
  */
-class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningBraceSameLine.ContentAfterBrace -- NOSONAR.
+class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBraceSameLine.ContentAfterBrace -- NOSONAR.
 
     // phpcs:disable WordPress.WP.AlternativeFunctions -- use system functions
 
@@ -31,7 +31,7 @@ class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningB
      * Create public static instance.
      *
      * @static
-     * @return MainWP_Child_Custom_Reinstaller
+     * @return MainWP_Child_Custom_Updater
      */
     public static function instance() {
         if ( null === static::$instance ) {
@@ -53,49 +53,113 @@ class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningB
     }
 
     /**
-     * Add a "Reinstall" action link to the plugin action links.
-     *
-     * @param array $links Array of existing action links for the plugin.
-     * @return array Modified array of action links including the reinstall link.
+     * Method hook_plugins_loaded().
      */
-    public function reinstall_actions_link( $links ) {
-        $url                = wp_nonce_url(
-            add_query_arg(
+    public function hook_plugins_loaded() {
+        if ( 1 === (int) get_option( 'mainwp_child_settings_enable_early_access_updates' ) ) {
+            $this->init_custom_updater();
+            /**
+             * Provide custom content for the plugin details modal.
+             */
+            add_filter( 'plugins_api', array( &$this, 'plugin_information_link' ), 10, 3 );
+        }
+        // Handle reinstall.
+        add_action( 'admin_init', array( &$this, 'handle_reinstall_request' ) );
+    }
+
+
+    /**
+     * Method init_custom_updater().
+     */
+    public function init_custom_updater() {
+        if ( file_exists( MAINWP_CHILD_PLUGIN_DIR . 'includes/updater.php' ) ) {
+            require_once MAINWP_CHILD_PLUGIN_DIR . 'includes/updater.php'; //phpcs:ignore -- NOSONAR - compatible.
+        }
+
+        if ( class_exists( '\MainWP\Child\UUPD\V1\UUPD_Updater_V1' ) ) {
+
+            /**
+             * Filter: mainwp_custom_updater_register_info
+             *
+             * @since 6.0
+             */
+            $updater_config = apply_filters(
+                'mainwp_child_custom_updater_register_info',
                 array(
-                    'action' => 'reinstall_stable',
-                    'plugin' => plugin_basename( MAINWP_CHILD_FILE ),
-                ),
-                admin_url( 'plugins.php' )
-            ),
-            'reinstall_stable'
+                    'plugin_file'      => plugin_basename( MAINWP_CHILD_FILE ),
+                    'slug'             => 'mainwp-child',
+                    'name'             => 'MainWP Child',
+                    'version'          => MainWP_Child::$version,
+                    // Optional: provide a secret 'key' value when using a private update server or GitHub releases that require it.
+                    'server'           => 'https://github.com/example/mainwp-child',  // GitHub or private server.
+                    'github_token'     => 'github_pat_xxxxx', // optional.
+                    'allow_prerelease' => true, // Optional - default is false. Set to true to allow beta/RC updates.
+                )
+            );
+
+            \MainWP\Child\UUPD\V1\UUPD_Updater_V1::register( $updater_config );
+        }
+    }
+
+    /**
+     * Method plugin_information_link.
+     *
+     * @param  mixed $res Information response.
+     * @param  mixed $action Action type.
+     * @param  mixed $args  Arguments.
+     * @return void
+     */
+    public function plugin_information_link( $res, $action, $args ) {
+
+        // Only handle plugin information requests.
+        if ( 'plugin_information' !== $action ) {
+            return $res;
+        }
+
+        // The plugin slug to match.
+        $expected_slug = 'mainwp-child';
+
+        if ( empty( $args->slug ) || $args->slug !== $expected_slug ) {
+            return $res;
+        }
+
+        // Build the response object.
+        $response = new \stdClass();
+
+        // Basic metadata.
+        $response->name     = 'MainWP Child';                // plugin display name.
+        $response->slug     = $expected_slug;             // plugin folder slug.
+        $response->author   = '<a href="https://mainwp.com">MainWP Child</a>';
+        $response->requires = '6.2';
+        $response->tested   = '6.8.3';
+        $response->homepage = 'https://mainwp.com';
+
+        // Long HTML sections shown in the modal. Use HTML safely (WP outputs this directly).
+        $response->sections = array(
+            'Changelog' => '
+                <a href="https://mainwp.com/mainwp-early-release/" target="_blank">https://mainwp.com/mainwp-early-release/</a>
+            ',
         );
-        $links['reinstall'] = '<a href="' . esc_url( $url ) . '">' . esc_html__( 'Reinstall', 'mainwp-child' ) . '</a>';
-        return $links;
+
+        return $response;
     }
 
     /**
      * Method handle_reinstall_request()
      */
     public function handle_reinstall_request() { // phpcs:ignore Generic.CodeAnalysis.UselessOverridingMethod -- NOSONAR.
-        if ( ! ( isset( $_GET['action'] ) && 'reinstall_stable' === $_GET['action'] ) ) {
+        if ( ! ( isset( $_GET['action'] ) && 'reinstall_stable_child' === $_GET['action'] ) ) {
             return;
         }
-        check_admin_referer( 'reinstall_stable' );
+        check_admin_referer( 'reinstall_stable_child' );
 
         if ( ! current_user_can( 'install_plugins' ) ) {
             wp_die( 'No permission.' );
         }
 
-        $plugin = sanitize_text_field( wp_unslash( $_GET['plugin'] ?? '' ) );
-
-        if ( empty( $plugin ) ) {
-            wp_safe_redirect( admin_url( 'plugins.php?reinstall=error' ) );
-            exit;
-        }
+        $plugin = 'mainwp/mainwp.php';
 
         // --- safer reinstall: move to backup, install, restore on fail, then activate ---
-
-        // $plugin expected like "mainwp/mainwp.php" and $was_active boolean available.
 
         require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php'; //phpcs:ignore -- NOSONAR - ok.
         require_once ABSPATH . 'wp-admin/includes/plugin.php'; //phpcs:ignore -- NOSONAR - ok.
@@ -192,7 +256,7 @@ class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningB
                     // Could not backup; abort and report error.
                     $msg = "Reinstall: failed to move or copy plugin directory to backup for {$plugin}";
                     self::plugin_reinstall_log( $plugin, 'backup_failed', $msg );
-                    wp_safe_redirect( admin_url( 'plugins.php?reinstall=backup_failed' ) );
+                    wp_safe_redirect( admin_url( 'options-general.php?page=mainwp_child_tab&tab=early-updates&reinstall=backup_failed' ) );
                     exit;
                 }
             }
@@ -302,7 +366,7 @@ class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningB
                 }
             }
 
-            wp_safe_redirect( admin_url( 'plugins.php?reinstall=install_failed' ) );
+            wp_safe_redirect( admin_url( 'options-general.php?page=mainwp_child_tab&tab=early-updates&reinstall=install_failed' ) );
             exit;
         }
 
@@ -334,7 +398,7 @@ class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningB
             $msg = "Reinstall: install completed but unable to locate main plugin file for expected {$plugin}. Backup kept at {$backup_path}.";
             self::plugin_reinstall_log( $plugin, 'installed_missing_main_but_backup', $msg, array( 'backup_path' => $backup_path ) );
             // return backup path in URL so admin can inspect.
-            wp_safe_redirect( admin_url( 'plugins.php?reinstall=installed_missing_main&backup=' . rawurlencode( $backup_path ) ) );
+            wp_safe_redirect( admin_url( 'options-general.php?page=mainwp_child_tab&tab=early-updates&reinstall=installed_missing_main&backup=' . rawurlencode( $backup_path ) ) );
             exit;
         }
 
@@ -353,7 +417,7 @@ class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningB
                         'activate_error' => $act->get_error_messages(),
                     )
                 );
-                wp_safe_redirect( admin_url( 'plugins.php?reinstall=installed_but_activate_failed&plugin=' . rawurlencode( $found ) . '&backup=' . rawurlencode( $backup_path ) ) );
+                wp_safe_redirect( admin_url( 'options-general.php?page=mainwp_child_tab&tab=early-updates&reinstall=installed_but_activate_failed&plugin=' . rawurlencode( $found ) . '&backup=' . rawurlencode( $backup_path ) ) );
                 exit;
             }
         }
@@ -651,11 +715,63 @@ class MainWP_Child_Custom_Reinstaller { // phpcs:ignore Generic.Classes.OpeningB
         return false;
     }
 
+    /**
+     * Render early access updates settings sub page.
+     */
+    public static function render_early_access_updates() {
+        $enable_early_access = get_option( 'mainwp_child_settings_enable_early_access_updates' );
+        static::render_reinstall_notices();
+        ?>
+        <form method="post" action="options-general.php?page=mainwp_child_tab">
+            <table class="form-table">
+                <tbody>
+                    <tr>
+                        <th scope="row" style="width:300px"><?php esc_html_e( 'Enable Early Access for Child Site', 'mainwp-child' ); ?></th>
+                        <td>
+                        <label for="mainwp_child_settings_enable_early_access_updates" class="mainwp-toggle">
+                            <input type="checkbox" name="mainwp_child_settings_enable_early_access_updates" id="mainwp_child_settings_enable_early_access_updates" value="1" <?php echo $enable_early_access ? 'checked' : ''; ?> />
+                            <span class="mainwp-slider"></span>
+                        </label><?php esc_html_e( 'Allow your child site to check for pre-release versions (beta, RC, etc.) directly from the official GitHub repository.', 'mainwp-child' ); ?>
+                        </td>
+                    <tr>
+                </tbody>
+            </table>
+
+            <?php
+                $url_reinstall = wp_nonce_url(
+                    add_query_arg(
+                        array(
+                            'action' => 'reinstall_stable_child',
+                        ),
+                        admin_url( 'options-general.php?page=mainwp_child_tab&tab=early-updates' )
+                    ),
+                    'reinstall_stable_child'
+                );
+            ?>
+
+            <table class="form-table">
+                <tbody>
+                    <tr>
+                        <th scope="row" style="width:300px"><?php esc_html_e( 'Roll Back to Latest Stable Release', 'mainwp-child' ); ?></th>
+                        <td>
+                            <a href="<?php echo esc_url( $url_reinstall ); ?>" onclick="return confirm('Are you sure you want to roll back to the latest stable release from WordPress.org? This will overwrite your current version and reinstall the stable build');" class="button-secondary button"><?php esc_html_e( 'Roll Back to Stable Version', 'mainwp-child' ); ?></a>
+                            <?php printf( esc_html__( 'Revert your MainWP Child to the latest stable version from %sWordPress.org%s.', 'mainwp-child' ), '<a href="https://wordpress.org/" target="_blank">', '</a>' ); ?>
+                        </td>
+                    <tr>
+                </tbody>
+            </table>
+            <p class="submit">
+                <input type="submit" name="submit" id="submit" class="mainwp-button" value="<?php esc_attr_e( 'Save Settings', 'mainwp-child' ); ?>">
+            </p>
+            <input type="hidden" name="nonce" value="<?php echo esc_attr( wp_create_nonce( 'child-early-access-settings' ) ); ?>">
+        </form>
+        <?php
+    }
 
     /**
-     * Method reinstall_admin_notices()
+     * Method render_reinstall_notices()
      */
-    public function reinstall_admin_notices() {
+    public static function render_reinstall_notices() {
         if ( empty( $_GET['reinstall'] ) ) { //phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             return;
         }
