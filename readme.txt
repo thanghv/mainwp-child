@@ -7,7 +7,7 @@ Plugin URI: https://mainwp.com
 Requires at least: 6.2
 Tested up to: 6.8.3
 Requires PHP: 7.4
-Stable tag: 6.0.-rc.2
+Stable tag: 6.0.-rc.4
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
@@ -111,7 +111,7 @@ We have an extensive FAQ with more questions and answers [here](https://mainwp.c
 
 == Changelog ==
 
-= 6.0.-rc.2 - Maintenance Release - 10-7-2025 =
+= 5.4.0.15 - Maintenance Release - 10-7-2025 =
 
 * Fixed: Resolved an issue where certain Comments activity was not being captured in reports on specific server configurations.
 * Updated: Improved output handling in the server information display by removing redundant HTML escaping to enhance performance and code clarity. ([PR481](https://github.com/mainwp/mainwp-child/pull/481)) - thanks [DAnn2012](https://github.com/DAnn2012)
