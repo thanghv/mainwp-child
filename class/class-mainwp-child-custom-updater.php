@@ -62,6 +62,7 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
              * Provide custom content for the plugin details modal.
              */
             add_filter( 'plugins_api', array( &$this, 'plugin_information_link' ), 10, 3 );
+            add_action( 'after_plugin_row_' . plugin_basename( MAINWP_CHILD_FILE ), array( &$this, 'plugin_show_error_row' ), 10, 3 );
         }
         // Handle reinstall.
         add_action( 'admin_init', array( &$this, 'handle_reinstall_request' ) );
@@ -78,10 +79,13 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
 
         if ( class_exists( '\MainWP\Child\UUPD\V1\UUPD_Updater_V1' ) ) {
 
+            $encrypted = get_option( 'mainwp_child_settings_custom_updater_git_pat', '' );
+            $git_pat   = MainWP_Child_Keys_Manager::instance()->decrypt_string( $encrypted );
+
             /**
              * Filter: mainwp_custom_updater_register_info
              *
-             * @since 6.0
+             * @since 5.4.1
              */
             $updater_config = apply_filters(
                 'mainwp_child_custom_updater_register_info',
@@ -92,8 +96,9 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
                     'version'          => MainWP_Child::$version,
                     // Optional: provide a secret 'key' value when using a private update server or GitHub releases that require it.
                     'server'           => 'https://github.com/github-username/mainwp-child',  // GitHub or private server.
-                    // 'github_token'     => 'github_pat_xxxxx', // optional.
+                    'github_token'     => ! empty( $git_pat ) ? $git_pat : '', // optional.
                     'allow_prerelease' => true, // Optional - default is false. Set to true to allow beta/RC updates.
+                    'user_agent'       => 'MainWP Child/' . MainWP_Child::$version,
                 )
             );
 
@@ -142,6 +147,33 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
         );
 
         return $response;
+    }
+
+
+    /**
+     * Method plugin_show_error_row.
+     *
+     * @param  mixed $plugin_file Plugin file.
+     * @return void
+     */
+    public function plugin_show_error_row( $plugin_file ) {
+
+        $slug = dirname( $plugin_file );
+
+        $unauth_key = 'uupd_' . $slug . '_unauth_error';
+
+        if ( ! get_transient( $unauth_key ) ) {
+            return;
+        }
+
+        $unauth_error = sprintf( esc_html__( 'Unable to check for updates with your GitHub token. Make sure your PAT is valid and has the right permissions. See %shere%s for more info.', 'mainwp-child' ), '<a href="https://mainwp.com/docs/github-personal-access-token/" target="_blank">', '</a>' );
+        echo '<tr class="plugin-update-tr">
+            <td colspan="3" class="plugin-update colspanchange">
+                <div class="notice notice-error inline">
+                    <p>' . $unauth_error . '</p>' . //phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped above.
+                '</div>
+            </td>
+          </tr>';
     }
 
     /**
@@ -441,12 +473,12 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
     /**
      * Locate installed plugin basename by slug.
      *
-     * @param string $slug The plugin slug (e.g., 'mainwp').
-     * @return string|false Plugin basename (e.g., 'mainwp/mainwp.php') or false if not found.
+     * @param string $slug The plugin slug.
+     * @return string|false Plugin basename or false if not found.
      */
     public function locate_installed_plugin_basename( $slug ) {
         if ( ! function_exists( 'get_plugins' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+            require_once ABSPATH . 'wp-admin/includes/plugin.php'; // phpcs:ignore -- NOSONAR - ok.
         }
 
         $plugins = get_plugins();
@@ -473,8 +505,7 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
      * @param int    $max_depth recursion depth when scanning directories
      * @return string|false
      */
-    public static function locate_installed_plugin_basename_recursive( $expected_basename, $new_install_window_secs = 600, $max_depth = 6 ) {
-        $expected_basename = trim( (string) $expected_basename );
+    public static function locate_installed_plugin_basename_recursive( $expected_basename, $new_install_window_secs = 600, $max_depth = 6 ) { //phpcs:ignore --NOSONAR - complexity acceptable for this function.
         if ( empty( $expected_basename ) ) {
             return false;
         }
@@ -499,7 +530,7 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
         };
 
         // helper: recursively scan a directory up to $depth for any php file with plugin header.
-        $recursive_scan_dir = function ( $dir, $depth ) use ( &$recursive_scan_dir, $has_plugin_header ) {
+        $recursive_scan_dir = function ( $dir, $depth ) use ( &$recursive_scan_dir, $has_plugin_header ) { //phpcs:ignore --NOSONAR - multi return acceptable for this function.
             if ( $depth < 0 ) {
                 return false;
             }
@@ -726,12 +757,12 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
             <table class="form-table">
                 <tbody>
                     <tr>
-                        <th scope="row" style="width:300px"><?php esc_html_e( 'Enable Early Access for Child Site', 'mainwp-child' ); ?></th>
+                        <th scope="row" style="width:300px"><?php esc_html_e( 'Enable Early Access for the MainWP Child Plugin', 'mainwp-child' ); ?></th>
                         <td>
                         <label for="mainwp_child_settings_enable_early_access_updates" class="mainwp-toggle">
                             <input type="checkbox" name="mainwp_child_settings_enable_early_access_updates" id="mainwp_child_settings_enable_early_access_updates" value="1" <?php echo $enable_early_access ? 'checked' : ''; ?> />
                             <span class="mainwp-slider"></span>
-                        </label><?php esc_html_e( 'Allow your child site to check for pre-release versions (beta, RC, etc.) directly from the official GitHub repository.', 'mainwp-child' ); ?>
+                        </label><?php esc_html_e( 'Allow your child site to check for pre-release versions (beta, RC, etc.) directly from the official MainWP GitHub repository.', 'mainwp-child' ); ?>
                         </td>
                     <tr>
                 </tbody>
@@ -754,7 +785,7 @@ class MainWP_Child_Custom_Updater { // phpcs:ignore Generic.Classes.OpeningBrace
                     <tr>
                         <th scope="row" style="width:300px"><?php esc_html_e( 'Roll Back to Latest Stable Release', 'mainwp-child' ); ?></th>
                         <td>
-                            <a href="<?php echo esc_url( $url_reinstall ); ?>" onclick="return confirm('Are you sure you want to roll back to the latest stable release from WordPress.org? This will overwrite your current version and reinstall the stable build');" class="button-secondary button"><?php esc_html_e( 'Roll Back to Stable Version', 'mainwp-child' ); ?></a>
+                            <a href="<?php echo esc_url( $url_reinstall ); ?>" onclick="return confirm('Are you sure you want to roll back to the latest stable release from WordPress.org? This will overwrite your current version and reinstall the stable build');" class="mainwp-basic-button"><?php esc_html_e( 'Roll Back to Stable Version', 'mainwp-child' ); ?></a>
                             <?php printf( esc_html__( 'Revert your MainWP Child to the latest stable version from %sWordPress.org%s.', 'mainwp-child' ), '<a href="https://wordpress.org/" target="_blank">', '</a>' ); ?>
                         </td>
                     <tr>

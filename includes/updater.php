@@ -137,6 +137,7 @@
 
 namespace MainWP\Child\UUPD\V1;
 
+
 if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
 
     class UUPD_Updater_V1 {
@@ -154,8 +155,8 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
         /** @var array Configuration settings */
         private $config;
 
-        /** @var bool Fetch success */
-        private $fetch_success = false;
+         /** @var bool Fetch success */
+        private $fetch_state = null;
 
         /**
          * Constructor.
@@ -211,7 +212,7 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
         }
 
         /** Fetch metadata JSON from remote server and cache it. */
-        private function fetch_remote() {
+        private function fetch_remote() { // phpcs:ignore -- NOSONAR - multi return acceptable for this function.
             $c          = $this->config;
             $slug_plain = $c['slug'] ?? '';
 
@@ -313,7 +314,8 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
             // Insert a hyphen before pre-release if someone wrote 1.3.0alpha2 / 1.3.0rc
             // Also capture shorthands and synonyms: a,b,pre,preview
             // Capture optional numeric like alpha2 / alpha-2 / alpha.2
-            if (preg_match('/^(\d+\.\d+\.\d+)[\.\-]?((?:alpha|a|beta|b|rc|dev|pre|preview))(?:(?:[\.\-]?)(\d+))?$/i', $v, $m)) {
+              if ( preg_match( '/^(\d+\.\d+\.\d+)[.-]?((?:alpha|a|beta|b|rc|dev|pre|preview))[.-]?(\d+)?$/i', $v, $m ) ) {
+
                 $core = $m[1];
                 $tag  = strtolower($m[2]);
                 $num  = isset($m[3]) && $m[3] !== '' ? $m[3] : '0';
@@ -327,6 +329,9 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
                     case 'rc':      $tag = 'rc';    break; // PHP is case-insensitive
                     case 'dev':     $tag = 'dev';   break;
                     case 'er':      $tag = 'er';    break;
+                    default:
+                        //nothing to.
+                        break;
                     // alpha/beta already work correctly
                 }
 
@@ -339,10 +344,9 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
             return $v;
         }
 
-
-
         /** Handle plugin update injection. */
-        public function plugin_update( $trans ) {
+        public function plugin_update( $trans ) { // phpcs:ignore -- NOSONAR - complexity acceptable for this function.
+
             if ( ! is_object( $trans ) || ! isset( $trans->checked ) || ! is_array( $trans->checked ) ) {
                 return $trans;
             }
@@ -358,47 +362,45 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
             $current = $trans->checked[ $file ] ?? $c['version'];
             $meta    = get_transient( $cache_id );
 
-             /**
+
+            /**
              * Hook for testing.
              *
-             * @since 6.0             *
+             * @since 5.4.1
              */
-            $testing_fetch = apply_filters( 'mainwp_child_uupd_testing_fetch_release', false, $slug );
+            $testing_fetch = apply_filters( 'mainwp_uupd_testing_fetch_release', false, $slug );
 
-            // Skip if last fetch failed
+            // Skip if last fetch failed.
             if ( ! $testing_fetch && ( false === $meta && get_transient( $error_key ) ) ) {
                 $this->log( " Skipping plugin update check for '{$slug}' — previous error cached" );
                 return $trans;
             }
 
-            // Fetch metadata if missing
+            // Fetch metadata if missing.
             if ( $testing_fetch || false === $meta ) {
                 if ( isset( $c['server'] ) && strpos( $c['server'], 'github.com' ) !== false ) {
                     $repo_url  = rtrim( $c['server'], '/' );
-                    $cache_key = 'uupd_github_release_' . md5( $repo_url );
+                    $cache_key = 'uupd_github_release_' . md5( $repo_url ); //phpcs:ignore -- NOSONAR - acceptable for field name.
                     $release   = get_transient( $cache_key );
 
-                    if (  $testing_fetch || false === $release ) {
+                    if ( $testing_fetch || false === $release ) {
 
-                        if ( $this->fetch_success ){
+                        // fetch one time.
+                        if ( null !== $this->fetch_state ) {
                             return $trans;
                         }
 
-                        // $api_url = str_replace( 'github.com', 'api.github.com/repos', $repo_url ) . '/releases/latest';
-                        // $token   = self::apply_filters_per_slug( 'uupd/github_token_override', $c['github_token'] ?? '', $slug );
-
-                        // $headers = [ 'Accept' => 'application/vnd.github.v3+json' ];
-                        // if ( $token ) {
-                        //     $headers['Authorization'] = 'token ' . $token;
-                        // }
-
-                        // $this->log( " GitHub fetch: $api_url" );
-                        // $response = wp_remote_get( $api_url, [ 'headers' => $headers ] );
-
                         $release = $this->fetch_github_release( $repo_url, $slug );
 
-                        if ( false === $release ) {
+                        if ( 'not_modified' === $release ) {
+                            $this->log( "GitHub API fetch — etag not modified - slug '{$slug}'" );
+                            return $trans;
+                        } elseif ( false === $release ) {
                             $msg = 'GitHub fetch failed or no releases/tags found';
+                            $unauth_key = 'uupd_' . $slug . '_unauth_error';
+                            if ( get_transient( $unauth_key ) ) {
+                                $msg = 'Unable to check for updates with your GitHub token. Make sure your PAT is valid and has the right permissions.';
+                            }
                             $this->log( "✗ GitHub API failed — $msg — caching error state" );
                             set_transient(
                                 $error_key,
@@ -407,30 +409,17 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
                             );
                             do_action( 'uupd_metadata_fetch_failed', [ 'slug' => $slug, 'server' => $repo_url, 'message' => $msg ] );
                             do_action( "uupd_metadata_fetch_failed/{$slug}", [ 'slug' => $slug, 'server' => $repo_url, 'message' => $msg ] );
-                            return $trans; // or continue depending on surrounding code
+                            $this->fetch_state = false;
+                            return $trans; // or continue depending on surrounding code.
                         } else {
                             $ttl = self::apply_filters_per_slug( 'uupd_success_cache_ttl', 6 * HOUR_IN_SECONDS, $slug );
                             set_transient( $cache_key, $release, $ttl );
-                            $this->fetch_success = true;
+                            $this->fetch_state = true;
+
+                            $unauth_key = 'uupd_' . $slug . '_unauth_error';
+                            delete_transient( $unauth_key );
                         }
 
-
-                        // if ( ! is_wp_error( $response ) && wp_remote_retrieve_response_code( $response ) === 200 ) {
-                        //     $release = json_decode( wp_remote_retrieve_body( $response ) );
-                        //     $ttl = self::apply_filters_per_slug( 'uupd_success_cache_ttl', 6 * HOUR_IN_SECONDS, $slug );
-                        //     set_transient( $cache_key, $release, $ttl );
-                        // } else {
-                        //     $msg = is_wp_error( $response ) ? $response->get_error_message() : 'Invalid HTTP response';
-                        //     $this->log( "✗ GitHub API failed — $msg — caching error state" );
-                        //     set_transient(
-                        //         $error_key,
-                        //         time(),
-                        //         self::apply_filters_per_slug( 'uupd_fetch_remote_error_ttl', 6 * HOUR_IN_SECONDS, $slug )
-                        //     );
-                        //     do_action( 'uupd_metadata_fetch_failed', [ 'slug' => $slug, 'server' => $repo_url, 'message' => $msg ] );
-                        //     do_action( "uupd_metadata_fetch_failed/{$slug}", [ 'slug' => $slug, 'server' => $repo_url, 'message' => $msg ] );
-                        //     return $trans;
-                        // }
                     }
 
                     if ( isset( $release->tag_name ) ) {
@@ -458,9 +447,9 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
                             'sections'     => [ 'changelog' => '' ],
                         ];
                     }
+
                     // Success: clear the error flag for this slug (if any)
                     delete_transient( $error_key );
-
                 } else {
                     $this->fetch_remote(); // Handles error logging + failure cache internally
                     $meta = get_transient( $cache_id );
@@ -539,33 +528,42 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
      *
      * Returns release object on success, or false on failure.
      */
-    private function fetch_github_release( $repo_url, $slug ) {
+    private function fetch_github_release( $repo_url, $slug ) { //phpcs:ignore --NOSONAR - complexity acceptable for this function.
+        // 1) Try /releases/latest first
         $repo_url = rtrim( $repo_url, '/' );
         $api_base = str_replace( 'github.com', 'api.github.com/repos', $repo_url );
         $token    = self::apply_filters_per_slug( 'uupd/github_token_override', $this->config['github_token'] ?? '', $slug );
         $headers  = [ 'Accept' => 'application/vnd.github.v3+json' ];
-        $headers['User-Agent'] = 'MainWP Child/' . \MainWP\Child\MainWP_Child::$version;
+
+        if ( ! empty( $this->config['user_agent'] ) ) {
+            $headers['User-Agent'] = $this->config['user_agent'];
+        }
 
         if ( $token ) {
             $headers['Authorization'] = 'token ' . $token;
         }
 
-        // 1) Try /releases/latest
-        $this->log( " GitHub fetch (latest): {$api_base}/releases/latest" );
-        $resp = wp_remote_get( $api_base . '/releases/latest', [ 'headers' => $headers, 'timeout' => 15 ] );
+        // Implement ETag caching to avoid using rate-limits.
+        $cached_etag = get_option("github_etag_$slug");
 
-        if ( ! is_wp_error( $resp ) && wp_remote_retrieve_response_code( $resp ) === 200 ) {
-            $release = json_decode( wp_remote_retrieve_body( $resp ) );
-            if ( $release ) {
-                return $release;
-            }
+        if ($cached_etag) {
+            $headers['If-None-Match'] = $cached_etag;
         }
 
-        // If /releases/latest returned 404 or otherwise, try listing releases.
+        // Try listing releases.
         // This will include prereleases. We'll respect allow_prerelease flag below.
-        $this->log( " GitHub fetch (list): {$api_base}/releases?per_page=10" );
-        $resp = wp_remote_get( $api_base . '/releases?per_page=10', [ 'headers' => $headers, 'timeout' => 15 ] );
-        if ( ! is_wp_error( $resp ) && wp_remote_retrieve_response_code( $resp ) === 200 ) {
+        // Fastest response.
+        $this->log( " GitHub fetch (list): {$api_base}/releases?per_page=1" );
+        $resp = wp_remote_get( $api_base . '/releases?per_page=1', [ 'headers' => $headers, 'timeout' => 15 ] );
+
+        $etag = wp_remote_retrieve_header( $resp, 'etag' );
+        if ($etag) {
+            update_option("github_etag_$slug", $etag);
+        }
+
+        $resp_code = wp_remote_retrieve_response_code( $resp );
+
+        if ( ! is_wp_error( $resp ) && $resp_code === 200 ) {
             $releases = json_decode( wp_remote_retrieve_body( $resp ) );
             if ( is_array( $releases ) && count( $releases ) ) {
                 // If allow_prerelease is false, prefer first non-prerelease. Otherwise take the first release.
@@ -584,9 +582,12 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
         }
 
         // 3) If there are no releases at all, try tags and synthesize a minimal "release"
-        $this->log( " GitHub fetch (tags): {$api_base}/tags?per_page=5" );
-        $resp = wp_remote_get( $api_base . '/tags?per_page=5', [ 'headers' => $headers, 'timeout' => 15 ] );
-        if ( ! is_wp_error( $resp ) && wp_remote_retrieve_response_code( $resp ) === 200 ) {
+        $this->log( " GitHub fetch (tags): {$api_base}/tags?per_page=1" );
+        $resp = wp_remote_get( $api_base . '/tags?per_page=1', [ 'headers' => $headers, 'timeout' => 15 ] );
+
+        $resp_code = wp_remote_retrieve_response_code( $resp );
+
+        if ( ! is_wp_error( $resp ) && $resp_code === 200 ) {
             $tags = json_decode( wp_remote_retrieve_body( $resp ) );
             if ( is_array( $tags ) && ! empty( $tags[0]->name ) ) {
                 $tag = $tags[0]->name;
@@ -602,12 +603,26 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
             }
         }
 
+        if ( 401 === $resp_code && ! empty( $this->config['github_token'] ) ) {
+            $unauth_key = 'uupd_' . $slug . '_unauth_error';
+            set_transient(
+                $unauth_key,
+                time(),
+                self::apply_filters_per_slug( 'uupd_fetch_unauth_error_ttl', 6 * HOUR_IN_SECONDS, $slug )
+            );
+        }
+
+        // Handle 304 (no changes).
+        if ( 304 === $resp_code ) {
+            return 'not_modified';
+        }
+
         // Failure: return false
         return false;
     }
 
 
-    public function theme_update( $trans ) {
+    public function theme_update( $trans ) { // phpcs:ignore -- NOSONAR - complexity acceptable for this function.
         if ( ! is_object( $trans ) || ! isset( $trans->checked ) || ! is_array( $trans->checked ) ) {
             return $trans;
         }
@@ -632,7 +647,7 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
         if ( false === $meta ) {
             if ( isset( $c['server'] ) && strpos( $c['server'], 'github.com' ) !== false ) {
                 $repo_url  = rtrim( $c['server'], '/' );
-                $cache_key = 'uupd_github_release_' . md5( $repo_url );
+                $cache_key = 'uupd_github_release_' . md5( $repo_url ); //phpcs:ignore -- NOSONAR - acceptable for field name.
                 $release   = get_transient( $cache_key );
 
                 if ( false === $release ) {
@@ -839,20 +854,24 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
         /** Optional debug logger. */
         private function log( $msg ) {
             if ( apply_filters( 'updater_enable_debug', false ) ) {
-                error_log( "[Updater] {$msg}" );
+                error_log( "[Updater] {$msg}" ); //phpcs:ignore -- NOSONAR - debug only disabled by default.
                 do_action( 'uupd/log', $msg, $this->config['slug'] ?? '' );
             }
         }
 
 
-        private static function ends_with( $haystack, $needle ) {
+        private static function ends_with( $haystack, $needle ) { //phpcs:ignore -- NOSONAR - polyfill acceptable.
             if ( function_exists( 'str_ends_with' ) ) {
                 return \str_ends_with( (string) $haystack, (string) $needle );
             }
             $haystack = (string) $haystack;
             $needle   = (string) $needle;
-            if ( $needle === '' ) return true;
-            if ( strlen( $needle ) > strlen( $haystack ) ) return false;
+            if ( $needle === '' ) {
+                return true;
+            }
+            if ( strlen( $needle ) > strlen( $haystack ) ) {
+                return false;
+            }
             return substr( $haystack, -strlen( $needle ) ) === $needle;
         }
 
@@ -864,9 +883,9 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
          *
          * @param array $config  Same structure you passed to the old uupd_register_updater_and_manual_check().
          */
-        public static function register( array $config ) {
+        public static function register( array $config ) { //phpcs:ignore -- NOSONAR - complexity acceptable for this function.
             // 1) Instantiate the updater class:
-            new self( $config );
+            new self( $config ); //phpcs:ignore -- NOSONAR - correct - instance needed for hooks.
 
             // 2) Add the “Check for updates” link under the plugin row:
             $our_file   = $config['plugin_file'] ?? null;
@@ -876,7 +895,7 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
             if ( $our_file ) {
                 add_filter(
                     'plugin_row_meta',
-                    function( array $links, string $file, array $plugin_data ) use ( $our_file, $slug, $textdomain ) {
+                    function( $links, $file ) use ( $our_file, $slug, $textdomain ) {
                         if ( $file === $our_file ) {
                             $nonce     = wp_create_nonce( 'uupd_manual_check_' . $slug );
                             $check_url = admin_url( sprintf(
@@ -921,14 +940,21 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
                 wp_die( __( 'Security check failed.' ) );
             }
 
+            $cache_id  = 'upd_' . $slug;
+            $error_key = $cache_id . '_error';
+
             // 5) It’s our plugin’s “manual check,” so clear the transient and force WP to fetch again.
-            delete_transient( 'upd_' . $slug );
+            delete_transient( $cache_id );
+            delete_transient( $error_key );
 
             //ALSO clear GitHub release cache if using GitHub
             if ( isset( $config['server'] ) && strpos( $config['server'], 'github.com' ) !== false ) {
                 $repo_url  = rtrim( $config['server'], '/' );
-                $gh_key    = 'uupd_github_release_' . md5( $repo_url );
+                $gh_key    = 'uupd_github_release_' . md5( $repo_url ); //phpcs:ignore -- NOSONAR - acceptable for field name.
                 delete_transient( $gh_key );
+
+                $unauth_key = 'uupd_' . $slug . '_unauth_error';
+                delete_transient( $unauth_key );
             }
 
             if ( ! empty( $config['plugin_file'] ) ) {
@@ -947,3 +973,4 @@ if ( ! class_exists( __NAMESPACE__ . '\UUPD_Updater_V1' ) ) {
         }
     }
 }
+
